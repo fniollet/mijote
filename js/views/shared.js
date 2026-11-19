@@ -1,4 +1,4 @@
-// Éléments partagés entre plusieurs vues
+// Éléments partagés entre plusieurs vues            (v1.0.1)
 import { store } from '../store.js';
 import { members, recipe, mealTitle } from '../model.js';
 import { esc, norm, haptic } from '../utils.js';
@@ -38,19 +38,45 @@ export function openMemberSwitch() {
   });
 }
 
+export const SYNC_LABELS = { synced: 'Synchronisé', syncing: 'Synchro…', offline: 'Hors ligne', local: 'Cet appareil', idle: '…' };
+
+/** Pastille de synchro — touchez-la pour forcer une synchronisation. */
 export function syncBadge() {
   const s = store.status;
-  const label = { synced: 'Synchronisé', syncing: 'Synchro…', offline: 'Hors ligne', local: 'Cet appareil', idle: '…' }[s] || s;
-  return `<span class="sync-dot" data-s="${s}"><i></i><span class="sl">${label}</span></span>`;
+  const p = store.pending;
+  return `<button type="button" class="sync-dot" data-s="${s}" data-sync title="Toucher pour synchroniser" aria-label="Synchronisation : ${SYNC_LABELS[s] || s}. Toucher pour synchroniser">
+    <i></i><span class="sl">${SYNC_LABELS[s] || s}${p && s !== 'synced' ? ` · ${p}` : ''}</span></button>`;
 }
-export const SYNC_LABELS = { synced: 'Synchronisé', syncing: 'Synchro…', offline: 'Hors ligne', local: 'Cet appareil', idle: '…' };
 export function updateSyncBadges() {
+  const p = store.pending;
   document.querySelectorAll('.sync-dot').forEach((el) => {
     el.dataset.s = store.status;
     const l = el.querySelector('.sl');
-    if (l) l.textContent = SYNC_LABELS[store.status] || store.status;
+    if (l) l.textContent = (SYNC_LABELS[store.status] || store.status) + (p && store.status !== 'synced' ? ` · ${p}` : '');
   });
 }
+
+let forcing = false;
+export async function forceSyncWithFeedback() {
+  if (store.mode !== 'cloud') {
+    toast('Mode « cet appareil » : aucune synchronisation. Créez un espace familial pour partager.', { icon: 'info', duration: 5000 });
+    return;
+  }
+  if (forcing) return;
+  forcing = true;
+  haptic(10);
+  const anims = [...document.querySelectorAll('.sync-dot i')].map((el) =>
+    el.animate([{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(1.8)', opacity: 0.3 }, { transform: 'scale(1)', opacity: 1 }], { duration: 700, iterations: Infinity }));
+  const ok = await store.forceSync();
+  anims.forEach((a) => a.cancel());
+  forcing = false;
+  if (ok) toast('Synchronisé ✓ · tout est à jour', { icon: 'cloud' });
+  else if (!navigator.onLine) toast('Pas de connexion Internet. Vos modifications sont gardées et partiront dès le retour du réseau.', { icon: 'cloudOff', duration: 5000 });
+  else toast('Serveur injoignable pour l’instant. Nouvel essai automatique dans quelques secondes.', { icon: 'cloudOff', duration: 5000 });
+}
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-sync]')) { e.preventDefault(); e.stopPropagation(); forceSyncWithFeedback(); }
+}, true);
 
 export const emptyState = (emoji, title, text, action = '') =>
   `<div class="empty-state"><div class="big">${emoji}</div><h3>${title}</h3><p>${text}</p>${action}</div>`;
