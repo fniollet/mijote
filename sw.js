@@ -6,7 +6,7 @@
 //  • Appels API Supabase : jamais mis en cache (données temps réel).
 // ⚠️ Augmenter VERSION à chaque publication pour mettre à jour les téléphones.
 // ─────────────────────────────────────────────────────────────
-const VERSION = 'mijote-v1.0.2';
+const VERSION = 'mijote-v1.0.3';
 const SHELL = [
   './', './index.html', './styles.css', './config.js', './manifest.webmanifest',
   './js/app.js', './js/utils.js', './js/icons.js', './js/ui.js', './js/store.js', './js/model.js',
