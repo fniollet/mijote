@@ -1,13 +1,15 @@
 -- ═══════════════════════════════════════════════════════════════
---  MIJOTÉ — schéma Supabase (v1.0.3) — relançable sans danger
+--  MIJOTÉ — schéma Supabase (v1.1) — relançable sans danger
 --  1 compte Auth = 1 famille · family_id = auth.uid() · isolation RLS
---  v1.0.3 : ajout des droits (GRANT) pour le rôle authenticated
---           (corrige « 42501 permission denied for table records »)
+--  Chaque entité est un enregistrement versionné de public.records ;
+--  patch_record fusionne les modifications CHAMP PAR CHAMP.
+--  v1.0.3 : droits (GRANT) pour authenticated (corrige l'erreur 42501)
+--  v1.1   : nouvelle collection « stock » (frigo / congélateur / placard)
 -- ═══════════════════════════════════════════════════════════════
 
 create table if not exists public.records (
   family_id   uuid        not null default auth.uid() references auth.users (id) on delete cascade,
-  collection  text        not null check (collection in ('settings','members','recipes','meals','items','purchases','favorites')),
+  collection  text        not null,
   id          text        not null check (char_length(id) between 1 and 200),
   data        jsonb       not null default '{}'::jsonb check (pg_column_size(data) < 3000000),
   deleted     boolean     not null default false,
@@ -16,6 +18,19 @@ create table if not exists public.records (
   version     integer     not null default 1,
   primary key (family_id, collection, id)
 );
+
+-- Liste des collections autorisées (v1.1 : + stock)
+do $$
+declare c record;
+begin
+  for c in select conname from pg_constraint
+           where conrelid = 'public.records'::regclass and contype = 'c'
+             and pg_get_constraintdef(oid) like '%collection%' loop
+    execute format('alter table public.records drop constraint %I', c.conname);
+  end loop;
+end $$;
+alter table public.records add constraint records_collection_check
+  check (collection in ('settings','members','recipes','meals','items','purchases','favorites','stock'));
 
 create index if not exists records_family_updated_idx on public.records (family_id, updated_at);
 
@@ -81,4 +96,9 @@ create or replace view public.v_meal_plans with (security_invoker = true) as
          (data->>'servings')::int as servings, updated_at
     from public.records where collection = 'meals' and not deleted;
 
-grant select on public.v_recipes, public.v_meal_plans to authenticated;
+create or replace view public.v_stock with (security_invoker = true) as
+  select family_id, id, data->>'name' as name, (data->>'qty')::numeric as qty, data->>'unit' as unit,
+         data->>'location' as location, (data->>'expires')::date as expires, data->>'source' as source, updated_at
+    from public.records where collection = 'stock' and not deleted;
+
+grant select on public.v_recipes, public.v_meal_plans, public.v_stock to authenticated;

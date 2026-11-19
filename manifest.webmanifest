@@ -1,7 +1,7 @@
 {
   "name": "Mijoté — les repas de la famille",
   "short_name": "Mijoté",
-  "description": "Planning des repas, recettes et liste de courses partagée pour toute la famille.",
+  "description": "Planning des repas, recettes, liste de courses partagée et stock du frigo pour toute la famille.",
   "lang": "fr",
   "dir": "ltr",
   "id": "./",
@@ -18,7 +18,8 @@
     { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
-    { "name": "Liste de courses", "short_name": "Courses", "url": "./#/courses", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Liste de courses", "short_name": "Courses", "url": "./#/courses?v=list", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Chez moi (stock)", "short_name": "Chez moi", "url": "./#/courses?v=stock", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
     { "name": "Planning de la semaine", "short_name": "Planning", "url": "./#/planning", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

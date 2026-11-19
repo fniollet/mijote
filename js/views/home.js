@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// ACCUEIL (spec §3.2) — tableau de bord familial
+// ACCUEIL (spec §3.2) — tableau de bord familial   (v1.1 : widget « Chez moi »)
 // ─────────────────────────────────────────────────────────────
 import { store } from '../store.js';
-import { settings, mealsOn, nextMeal, recipe, mealTitle, mealTime, shopping, mealsBetween } from '../model.js';
+import { settings, mealsOn, nextMeal, recipe, mealTitle, mealTime, shopping, stockGroups } from '../model.js';
 import { SLOTS, SLOT, totalTime, scaleQty, fmtQty, ingredientName } from '../domain.js';
 import { esc, todayISO, addDays, startOfWeek, fmtDate, dayName, fromISO, relDay, fmtDuration, daysBetween } from '../utils.js';
 import { icon } from '../icons.js';
@@ -10,7 +10,7 @@ import { cover, avatar } from '../ui.js';
 import { openAddMeal, openMealActions } from './planning.js';
 import { openQuickAdd } from './shopping.js';
 import { openEditor } from './editor.js';
-import { mealThumb, openMemberSwitch, syncBadge, freeEmoji } from './shared.js';
+import { openMemberSwitch, syncBadge, freeEmoji } from './shared.js';
 
 export function mount(root) {
   let first = true;
@@ -27,6 +27,8 @@ export function mount(root) {
     const pct = remaining + bought ? Math.round((bought / (remaining + bought)) * 100) : 0;
     const next = nextMeal();
     const ws = startOfWeek(today);
+    const groups = stockGroups();
+    const soon = groups.filter((g) => g.expires && daysBetween(today, g.expires) <= 2);
 
     root.innerHTML = `
       <div class="${first ? 'stagger' : ''}">
@@ -43,7 +45,8 @@ export function mount(root) {
         ${next ? heroCard(next, today) : `
           <div class="hero hero-empty card"><div class="big">🍳</div><h2 style="color:var(--ink);font-size:28px">Que mange-t-on ?</h2>
           <p class="muted" style="margin:6px 0 18px">Aucun repas planifié pour les prochains jours.</p>
-          <button class="btn primary" data-act="add-meal">${icon('plus', 20)} Planifier un repas</button></div>`}
+          <div class="row" style="justify-content:center;flex-wrap:wrap"><button class="btn primary" data-act="add-meal" style="flex:none">${icon('plus', 20)} Planifier un repas</button>
+          ${groups.length ? `<button class="btn ghost" data-go="#/recettes?f=stock" style="flex:none">🧊 Avec ce que j'ai</button>` : ''}</div></div>`}
 
         <div class="section-title"><h2>Aujourd'hui</h2><a href="#/planning?d=${today}">Planning ${icon('right', 14)}</a></div>
         <div class="today-row">${SLOTS.map((sl) => slotCard(sl, mealsOn(today, sl.id)[0], today)).join('')}</div>
@@ -64,13 +67,18 @@ export function mount(root) {
             }).join('')}</div>
           </div>
         </div>
+        <button class="card stock-widget" data-go="#/courses?v=stock">
+          <span class="sw-ic">🧊</span>
+          <span class="sw-body"><b>Chez moi</b><small>${groups.length ? `${groups.length} produit${groups.length > 1 ? 's' : ''} en stock` : 'Frigo, congélateur, placard : rien d’enregistré'}${soon.length ? ` · <span class="tagx warn">${soon.length} à consommer vite</span>` : ''}</small></span>
+          ${icon('right', 18)}
+        </button>
 
         <div class="section-title"><h2>Raccourcis</h2></div>
         <div class="quick">
           <button data-act="add-meal"><span class="qi" style="background:linear-gradient(135deg,#ff8a3d,#ff5b2e)">${icon('calendar')}</span>Ajouter un repas</button>
           <button data-act="add-recipe"><span class="qi" style="background:linear-gradient(135deg,#b49cff,#8c6cf0)">${icon('book')}</span>Nouvelle recette</button>
           <button data-act="add-item"><span class="qi" style="background:linear-gradient(135deg,#7fd49b,#4fa772)">${icon('cart')}</span>Ajouter aux courses</button>
-          <button data-go="#/planning"><span class="qi" style="background:linear-gradient(135deg,#7fb0ff,#4f86f7)">${icon('list')}</span>Voir le planning</button>
+          <button data-go="#/recettes?f=stock"><span class="qi" style="background:linear-gradient(135deg,#7fb0ff,#4f86f7)">${icon('fridge')}</span>Que cuisiner ?</button>
         </div>
         <p class="foot-note">${esc(s.name)} · Mijoté</p>
       </div>`;
@@ -112,7 +120,7 @@ export function mount(root) {
     return `Aujourd'hui · ${hhmm}`;
   };
 
-  const slotCard = (sl, m, today) => {
+  const slotCard = (sl, m) => {
     if (!m) return `<button class="slot-card empty" data-act="add-slot" data-slot="${sl.id}"><span style="font-size:26px">${sl.emoji}</span>${sl.label}<span class="linkish" style="font-size:12.5px">+ Ajouter</span></button>`;
     const r = m.recipeId ? recipe(m.recipeId) : null;
     return `<button class="slot-card" data-act="meal" data-id="${m.id}">

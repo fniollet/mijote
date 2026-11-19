@@ -2,11 +2,11 @@
 // Service worker Mijoté
 //  • Fichiers de l'app : « réseau d'abord » (toujours à jour en ligne),
 //    repli sur le cache hors ligne → l'app s'ouvre même sans réseau.
-//  • Polices & bibliothèque Supabase (CDN versionnés) : cache puis mise à jour.
+//  • Polices & bibliothèques (CDN versionnés) : cache puis mise à jour.
 //  • Appels API Supabase : jamais mis en cache (données temps réel).
 // ⚠️ Augmenter VERSION à chaque publication pour mettre à jour les téléphones.
 // ─────────────────────────────────────────────────────────────
-const VERSION = 'mijote-v1.0.3';
+const VERSION = 'mijote-v1.1.0';
 const SHELL = [
   './', './index.html', './styles.css', './config.js', './manifest.webmanifest',
   './js/app.js', './js/utils.js', './js/icons.js', './js/ui.js', './js/store.js', './js/model.js',
@@ -18,7 +18,8 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // allSettled : un fichier manquant n'empêche pas l'installation
+  e.waitUntil(caches.open(VERSION).then((c) => Promise.allSettled(SHELL.map((u) => c.add(u)))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -36,10 +37,8 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // Données Supabase : jamais interceptées
   if (url.hostname.endsWith('supabase.co') || url.hostname.endsWith('supabase.in') || url.protocol.startsWith('ws')) return;
 
-  // CDN (polices, supabase-js) : stale-while-revalidate
   if (/fonts\.(googleapis|gstatic)\.com|esm\.sh/.test(url.hostname)) {
     e.respondWith(
       caches.open('mijote-cdn').then(async (c) => {
@@ -53,7 +52,6 @@ self.addEventListener('fetch', (e) => {
 
   if (url.origin !== location.origin) return;
 
-  // App : réseau d'abord (4 s max), puis cache
   e.respondWith(
     (async () => {
       const cache = await caches.open(VERSION);

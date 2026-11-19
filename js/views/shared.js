@@ -1,4 +1,4 @@
-// Éléments partagés entre plusieurs vues            (v1.0.1)
+// Éléments partagés entre plusieurs vues            (v1.1)
 import { store } from '../store.js';
 import { members, recipe, mealTitle } from '../model.js';
 import { esc, norm, haptic } from '../utils.js';

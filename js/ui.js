@@ -77,7 +77,7 @@ function dragToDismiss(sheetEl, close) {
 /** Menu d'actions contextuel. */
 export function actionSheet({ title, subtitle, header = '', actions }) {
   return new Promise((resolve) => {
-    const s = sheet({
+    sheet({
       title, subtitle,
       body: `${header}<div class="action-list">${actions
         .filter(Boolean)
@@ -124,12 +124,16 @@ export function toast(msg, { icon: ic = 'check', action, onAction, duration = 32
   t.className = `toast ${tone}`;
   t.innerHTML = `<span class="toast-ic">${icon(ic, 18)}</span><span class="toast-msg">${msg}</span>${action ? `<button class="toast-act">${esc(action)}</button>` : ''}`;
   host.appendChild(t);
+  while (host.children.length > 3) host.firstElementChild.remove();
   requestAnimationFrame(() => t.classList.add('in'));
   const kill = () => { t.classList.remove('in'); setTimeout(() => t.remove(), 300); };
   const timer = setTimeout(kill, duration);
   t.querySelector('.toast-act')?.addEventListener('click', () => { clearTimeout(timer); kill(); onAction && onAction(); });
   t.addEventListener('click', (e) => { if (!e.target.closest('.toast-act')) kill(); });
 }
+/** Toast avec bouton « Annuler ». */
+export const undoToast = (msg, undo, { icon: ic = 'check', duration = 5000 } = {}) =>
+  toast(msg, { icon: ic, action: 'Annuler', duration, onAction: () => { undo && undo(); haptic(8); toast('Annulé', { icon: 'undo', duration: 1600 }); } });
 
 // ── Couvertures de recettes (photo ou illustration générative) ──
 export function cover(r, { cls = '', eager = false } = {}) {
@@ -165,9 +169,10 @@ export const stepper = (name, value, { min = 1, max = 40, label = '' } = {}) => 
     <button type="button" class="st-btn" data-delta="1" aria-label="Plus">${icon('plus', 18)}</button>
   </div>`;
 document.addEventListener('click', (e) => {
-  const b = e.target.closest('.st-btn');
+  const b = e.target.closest('.st-btn[data-delta]');
   if (!b) return;
   const st = b.closest('.stepper');
+  if (!st) return;
   const inp = st.querySelector('input');
   const v = clamp(+inp.value + +b.dataset.delta, +st.dataset.min, +st.dataset.max);
   if (v === +inp.value) return;

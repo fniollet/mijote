@@ -1,16 +1,22 @@
 // ─────────────────────────────────────────────────────────────
-// PARAMÈTRES (spec §9) — famille, membres, préférences, données
+// PARAMÈTRES (spec §9) — famille, membres, préférences, données   (v1.1)
+// v1.1 : ordre des rayons, inviter (lien + QR code), état de la synchro
 // ─────────────────────────────────────────────────────────────
 import { store, LS } from '../store.js';
-import { settings, saveSettings, members, seedDemoWeek } from '../model.js';
+import { settings, saveSettings, members, seedDemoWeek, aisleOrder } from '../model.js';
 import { SLOTS } from '../domain.js';
-import { esc, uid, haptic } from '../utils.js';
+import { CATEGORY } from '../data/ingredients.js';
+import { esc, uid, haptic, timeAgo } from '../utils.js';
 import { icon } from '../icons.js';
 import { sheet, actionSheet, confirmDialog, toast, avatar, stepper, MEMBER_COLORS, MEMBER_EMOJIS } from '../ui.js';
-import { syncBadge } from './shared.js';
+import { syncBadge, forceSyncWithFeedback, SYNC_LABELS } from './shared.js';
+import { openAisleOrder } from './shopping.js';
 
+const APP_VERSION = '1.1.0';
 const row = (ic, color, title, sub = '', act = '', right = icon('right', 18, 'chev'), extra = '') =>
   `<button class="set-row ${extra}" ${act}><span class="sr-ic" style="background:${color}">${icon(ic, 20)}</span><span class="sr-body"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right}</button>`;
+
+const appUrl = () => location.href.split('#')[0].split('?')[0];
 
 export function mount(root, _p, app) {
   let first = true;
@@ -19,13 +25,18 @@ export function mount(root, _p, app) {
     const all = members(true);
     const theme = LS.get('theme', 'auto');
     const cloud = store.mode === 'cloud';
+    const order = aisleOrder();
+    const syncSub = cloud
+      ? `${SYNC_LABELS[store.status] || store.status}${store.lastSyncOkAt ? ` · dernière synchro ${timeAgo(store.lastSyncOkAt)}` : ''}${store.pending ? ` · ${store.pending} en attente` : ''}${store.lastError && store.status === 'offline' ? ` · ${esc(store.lastError)}` : ''}`
+      : '';
     root.innerHTML = `
       <div class="${first ? 'view-in' : ''}">
         <header class="page-head"><div><div class="eyebrow">Réglages</div><h1>La maison</h1></div>${syncBadge()}</header>
         <div class="family-card">
           <h2>${esc(s.name)}</h2>
           <p>${all.filter((m) => m.active !== false).length} membre${all.length > 1 ? 's' : ''} · ${cloud ? 'synchronisé entre vos appareils' : 'données sur cet appareil'}</p>
-          <div class="avatar-stack">${all.filter((m) => m.active !== false).map((m) => avatar(m, 42)).join('')}</div>
+          <div class="row" style="justify-content:space-between;align-items:center"><div class="avatar-stack" style="flex:none">${all.filter((m) => m.active !== false).map((m) => avatar(m, 42)).join('')}</div>
+          <button class="btn sm" data-a="invite" style="flex:none;background:#fff;color:#c2311a;position:relative;z-index:1">${icon('qr', 16)} Inviter</button></div>
         </div>
 
         <div class="set-group"><h3>Famille</h3><div class="set-list">
@@ -38,6 +49,12 @@ export function mount(root, _p, app) {
         <div class="set-group"><h3>Membres</h3><div class="set-list">
           ${all.map((m) => `<button class="set-row ${m.active === false ? 'inactive' : ''}" data-member="${m.id}">${avatar(m, 38)}<span class="sr-body"><b>${esc(m.name)}${m.id === store.memberId ? ' · <span class="faint">cet appareil</span>' : ''}</b><small>${m.active === false ? 'Profil désactivé' : 'Actif'}</small></span>${icon('right', 18, 'chev')}</button>`).join('')}
           ${row('plus', '#ff5b2e', 'Ajouter un membre', '', 'data-a="add-member"', '')}
+          ${row('share', '#8c6cf0', 'Inviter un proche ou une famille', 'Lien, message prêt à envoyer et QR code', 'data-a="invite"')}
+        </div></div>
+
+        <div class="set-group"><h3>Courses & stock</h3><div class="set-list">
+          ${row('list', '#4fa772', 'Ordre des rayons', order.slice(0, 4).map((id) => CATEGORY[id].emoji).join(' ') + ' … suivre le parcours de votre magasin', 'data-a="aisles"')}
+          ${row('fridge', '#4f86f7', 'Chez moi (stock)', 'Frigo, congélateur, placard', 'data-a="stock"')}
         </div></div>
 
         <div class="set-group"><h3>Préférences alimentaires</h3><div class="set-list">
@@ -49,7 +66,8 @@ export function mount(root, _p, app) {
         </div></div>
 
         <div class="set-group"><h3>Synchronisation & données</h3><div class="set-list">
-          ${cloud ? row('cloud', '#4fa772', 'Compte familial', esc(store.user?.email || ''), 'data-a="account"')
+          ${cloud ? row('reset', store.status === 'offline' ? '#e5484d' : '#4fa772', 'Synchroniser maintenant', syncSub, 'data-a="sync"')
+            + row('cloud', '#4fa772', 'Compte familial', esc(store.user?.email || ''), 'data-a="account"')
             : row('cloudOff', '#4f86f7', 'Synchroniser la famille', store.cloudAvailable ? 'Connecter un compte familial' : 'Configurer Supabase (gratuit, 5 min)', 'data-a="cloud"')}
           ${row('download', '#8c6cf0', 'Exporter une sauvegarde', 'Fichier JSON de toutes vos données', 'data-a="export"')}
           ${row('upload', '#8c6cf0', 'Importer une sauvegarde', '', 'data-a="import"')}
@@ -62,7 +80,7 @@ export function mount(root, _p, app) {
           ${row('moon', '#3a2416', 'Fermer Mijoté', 'Écran « À bientôt » et mise en veille', 'data-a="goodbye"')}
           ${row('logout', '#e5484d', cloud ? 'Se déconnecter de cet appareil' : 'Quitter l’espace local', '', 'data-a="logout"', '')}
         </div></div>
-        <p class="foot-note">Mijoté 1.0 · fait avec ❤️ pour les familles<br>Les indications d’allergènes ne sont jamais garanties.</p>
+        <p class="foot-note">Mijoté ${APP_VERSION} · fait avec ❤️ pour les familles<br>Les indications d’allergènes ne sont jamais garanties.</p>
       </div>`;
     first = false;
   };
@@ -70,6 +88,8 @@ export function mount(root, _p, app) {
   root.onclick = async (e) => {
     const m = e.target.closest('[data-member]');
     if (m) return editMember(store.get('members', m.dataset.member));
+    const t = e.target.closest('#theme [data-t]');
+    if (t) { LS.set('theme', t.dataset.t); app.applyTheme(); haptic(6); paint(); return; }
     const a = e.target.closest('[data-a]')?.dataset.a;
     const s = settings();
     switch (a) {
@@ -84,17 +104,21 @@ export function mount(root, _p, app) {
         title: 'Horaires des repas', subtitle: 'Servent à déterminer le « prochain repas » de l’accueil.',
         body: SLOTS.map((x) => `<label class="field"><span>${x.emoji} ${x.label}</span><input class="input" type="time" data-slot="${x.id}" value="${s.times[x.id]}"></label>`).join(''),
         footer: `<button class="btn primary" data-ok>Enregistrer</button>`,
-        onMount(el, close) { el.querySelector('[data-ok]').onclick = () => { const t = {}; el.querySelectorAll('[data-slot]').forEach((i) => (t[i.dataset.slot] = i.value || s.times[i.dataset.slot])); saveSettings({ times: t }); close(); toast('Horaires enregistrés'); }; },
+        onMount(el, close) { el.querySelector('[data-ok]').onclick = () => { const tt = {}; el.querySelectorAll('[data-slot]').forEach((i) => (tt[i.dataset.slot] = i.value || s.times[i.dataset.slot])); saveSettings({ times: tt }); close(); toast('Horaires enregistrés'); }; },
       });
       case 'tz': return simpleInput('Fuseau horaire', s.timezone, (v) => saveSettings({ timezone: v || s.timezone }), 'Ex. Europe/Paris, America/Montreal');
       case 'add-member': return editMember(null);
+      case 'invite': return inviteSheet();
+      case 'aisles': return openAisleOrder();
+      case 'stock': return (location.hash = '#/courses?v=stock');
       case 'diet': return dietSheet();
+      case 'sync': await forceSyncWithFeedback(); return paint();
       case 'account': return actionSheet({
         title: 'Compte familial', subtitle: esc(store.user?.email || ''),
         actions: [
           { icon: 'info', label: 'Comment connecter un autre téléphone ?', run: () => toast('Ouvrez Mijoté sur l’autre appareil → « Rejoindre ma famille » → même e-mail et mot de passe.', { icon: 'info', duration: 7000 }) },
           { icon: 'edit', label: 'Changer le mot de passe', run: async () => { const { askNewPassword } = await import('../onboarding.js'); askNewPassword(); } },
-          { icon: 'reset', label: 'Forcer une synchronisation', run: () => { store.pull(true); store.flush(); } },
+          { icon: 'reset', label: 'Forcer une synchronisation complète', run: () => forceSyncWithFeedback() },
         ],
       });
       case 'cloud': return cloudSheet();
@@ -131,11 +155,6 @@ export function mount(root, _p, app) {
       }
     }
   };
-  root.querySelector && root.addEventListener('click', (e) => {
-    const t = e.target.closest('#theme [data-t]');
-    if (!t) return;
-    LS.set('theme', t.dataset.t); app.applyTheme(); haptic(6); paint();
-  });
 
   const simpleInput = (title, value, save, placeholder = '') => sheet({
     title,
@@ -172,6 +191,47 @@ export function mount(root, _p, app) {
           store.put('members', m?.id || uid('u-'), { name, color: st.color, emoji: st.emoji, active, ...(m ? {} : { order: members(true).length, createdAt: new Date().toISOString() }) });
           close(); toast(m ? 'Profil mis à jour' : `${esc(name)} rejoint la famille 🎉`, { icon: 'users2' });
         };
+      },
+    });
+  };
+
+  // ── Inviter (lien, message prêt, QR code) ───────────────────
+  const inviteSheet = () => {
+    const url = appUrl();
+    const fam = settings().name;
+    const msgs = {
+      family: `Rejoins-nous sur Mijoté 🍲 — notre planning des repas, nos recettes et la liste de courses partagée !\n\n1. Ouvre ce lien dans Safari (iPhone) ou Chrome (Android) :\n${url}\n2. Installe-la : Partager → « Sur l’écran d’accueil »\n3. Ouvre l’app → « Rejoindre ma famille »\n4. Utilise l’e-mail et le mot de passe de « ${fam} » (je te les donne de vive voix 😉), puis choisis ton profil.`,
+      other: `Je te fais découvrir Mijoté 🍲 : planning des repas, recettes, courses partagées et ce qu’on a au frigo, pour toute la famille. Gratuit et privé.\n\n1. Ouvre ce lien dans Safari (iPhone) ou Chrome (Android) :\n${url}\n2. Installe-la : Partager → « Sur l’écran d’accueil »\n3. Ouvre l’app → « Créer notre espace familial »\nVos données restent privées : personne d’autre ne les voit.`,
+    };
+    let who = 'family';
+    sheet({
+      title: 'Inviter',
+      subtitle: 'Scannez le QR code avec l’appareil photo, ou envoyez le message.',
+      body: `
+        <div class="seg" id="who" style="margin-bottom:16px"><button type="button" class="on" data-w="family">👨‍👩‍👧 Un membre de ma famille</button><button type="button" data-w="other">🏡 Une autre famille</button></div>
+        <div class="qr-box" id="qr"><div class="faint" style="font-weight:700">Génération du QR code…</div></div>
+        <p style="text-align:center;font-weight:700;margin:12px 0 4px;word-break:break-all">${esc(url)}</p>
+        <div class="note" id="msg" style="white-space:pre-line;margin-top:12px"></div>
+        <p class="muted" style="font-size:12.5px;margin-top:10px">🔐 Le mot de passe familial n’est jamais inclus dans le message : transmettez-le de vive voix.</p>`,
+      footer: `<button class="btn ghost" data-a="copy">${icon('copy', 18)} Copier</button><button class="btn primary" data-a="share">${icon('share', 18)} Envoyer</button>`,
+      async onMount(el) {
+        const showMsg = () => (el.querySelector('#msg').textContent = msgs[who]);
+        showMsg();
+        el.querySelector('#who').onclick = (e) => { const b = e.target.closest('[data-w]'); if (!b) return; who = b.dataset.w; el.querySelectorAll('#who button').forEach((x) => x.classList.toggle('on', x === b)); showMsg(); };
+        el.querySelector('[data-a=copy]').onclick = async () => { try { await navigator.clipboard.writeText(msgs[who]); toast('Message copié', { icon: 'copy' }); } catch { toast('Copie impossible : sélectionnez le texte', { icon: 'info' }); } };
+        el.querySelector('[data-a=share]').onclick = async () => {
+          try { if (navigator.share) await navigator.share({ title: 'Mijoté', text: msgs[who] }); else { await navigator.clipboard.writeText(msgs[who]); toast('Message copié', { icon: 'copy' }); } } catch {}
+        };
+        try {
+          const mod = await import('https://esm.sh/qrcode-generator@1.4.4');
+          const qrcode = mod.default || mod;
+          const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
+          let svg;
+          try { svg = qr.createSvgTag({ cellSize: 6, margin: 2, scalable: true }); } catch { svg = qr.createImgTag(6, 8); }
+          el.querySelector('#qr').innerHTML = svg;
+        } catch {
+          el.querySelector('#qr').innerHTML = `<div class="faint" style="font-weight:700;text-align:center">QR code indisponible hors ligne.<br>Utilisez « Envoyer ».</div>`;
+        }
       },
     });
   };
@@ -241,5 +301,6 @@ export function mount(root, _p, app) {
   });
 
   paint();
-  return { refresh: paint };
+  const tick = setInterval(() => { if (!document.querySelector('.sheet-wrap')) paint(); }, 30000);
+  return { refresh: paint, destroy: () => clearInterval(tick) };
 }

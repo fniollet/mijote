@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// MIJOTÉ — point d'entrée : démarrage, routeur, navigation, PWA
+// MIJOTÉ — point d'entrée : démarrage, routeur, navigation, PWA   (v1.1)
 // ─────────────────────────────────────────────────────────────
 import { store, LS } from './store.js';
 import { settings, members, shopping, memberName, mealsOn, mealTitle } from './model.js';
@@ -68,7 +68,7 @@ function renderNav(active) {
   document.getElementById('sidebar').innerHTML = `
     <a class="brand" href="#/"><img src="icons/icon-192.png" alt=""><b>Mijoté</b></a>
     ${NAV.map((n) => `<a class="side-link ${n.id === active ? 'on' : ''}" href="${n.hash}">${icon(n.icon, 21)}${n.label}${badge(n)}</a>`).join('')}
-    <div class="side-foot">${avatar(me, 38)}<div style="min-width:0;flex:1"><b>${esc(me?.name || '')}</b><small>${esc(settings().name)}</small></div><span class="sync-dot" data-s="${store.status}" title="Synchronisation" style="padding:6px"><i></i></span></div>`;
+    <div class="side-foot">${avatar(me, 38)}<div style="min-width:0;flex:1"><b>${esc(me?.name || '')}</b><small>${esc(settings().name)}</small></div><span class="sync-dot" data-s="${store.status}" data-sync title="Synchroniser" style="padding:6px"><i></i></span></div>`;
 }
 
 function parseHash() {
@@ -91,7 +91,6 @@ function route() {
   currentKey = key;
   const [mod, nav] = entry;
   if (mod === Cook) {
-    // le mode cuisine est un calque plein écran : la vue précédente reste derrière
     current = mod.mount(view, params, api) || {};
     return;
   }
@@ -181,7 +180,7 @@ store.on('change', (d) => {
   refresh();
 });
 store.on('status', updateSyncBadges);
-store.on('error', (e) => toast(esc(e.message), { icon: 'info' }));
+store.on('error', (e) => toast(esc(e.message), { icon: 'info', duration: 7000 }));
 store.on('recovery', () => askNewPassword());
 store.on('signedout', () => location.reload());
 

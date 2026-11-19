@@ -1,12 +1,11 @@
 // ─────────────────────────────────────────────────────────────
 // FICHE RECETTE (spec §5.3–5.8) — portions recalculées en direct
 // ─────────────────────────────────────────────────────────────
-import { store } from '../store.js';
 import { recipe, favoriteSet, toggleFavorite, memberName, membersMap, saveRecipe, recipeInUse, settings } from '../model.js';
 import { scaleQty, fmtQty, ingredientName, totalTime, SLOT, DIETS } from '../domain.js';
 import { esc, fmtDuration, haptic, norm, timeAgo } from '../utils.js';
 import { icon } from '../icons.js';
-import { cover, avatar, stepper, actionSheet, confirmDialog, toast } from '../ui.js';
+import { cover, avatar, stepper, actionSheet, confirmDialog, toast, undoToast } from '../ui.js';
 import { openEditor } from './editor.js';
 import { openAddMeal } from './planning.js';
 import { backBtn, emptyState } from './shared.js';
@@ -37,7 +36,7 @@ export function mount(root, params) {
             <button class="icon-btn glass" data-act="more" aria-label="Plus">${icon('more', 22)}</button></div></div>
         </div>
         <div class="rd-body">
-          <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">${(r.categories || []).map((c) => `<span class="pill accent">${esc(c)}</span>`).join('')}${r.archived ? '<span class="pill">Archivée</span>' : ''}</div>
+          <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">${(r.categories || []).map((c) => `<span class="pill accent" style="flex:none">${esc(c)}</span>`).join('')}${r.archived ? '<span class="pill" style="flex:none">Archivée</span>' : ''}</div>
           <h1>${esc(r.title)}</h1>
           ${r.description ? `<p class="rd-desc">${esc(r.description)}</p>` : ''}
           <div class="rd-author">${r.builtin ? `<span class="avatar" style="--s:30px;--c:#ff5b2e">📚</span><span>Bibliothèque <b>Mijoté</b></span>`
@@ -109,14 +108,14 @@ export function mount(root, params) {
     actions: [
       !r.builtin && { icon: 'edit', label: 'Modifier la recette', run: () => openEditor(r) },
       { icon: 'copy', label: r.builtin ? 'Dupliquer pour la personnaliser' : 'Dupliquer', run: () => openEditor(r, { duplicate: true }) },
-      { icon: 'download', label: 'Partager la recette', run: () => share(r) },
+      { icon: 'share', label: 'Partager la recette', run: () => share(r) },
       !r.builtin && { sep: true },
       !r.builtin && (r.archived
         ? { icon: 'undo', label: 'Restaurer la recette', run: () => { saveRecipe({ archived: false }, r.id); toast('Recette restaurée'); } }
         : { icon: 'archive', label: 'Archiver', hint: 'Masquée de la bibliothèque, jamais supprimée', danger: true, run: async () => {
           const used = recipeInUse(r.id);
           if (await confirmDialog({ title: 'Archiver cette recette ?', text: used ? 'Elle est utilisée dans le planning : les repas existants restent intacts.' : 'Vous pourrez la restaurer depuis le filtre « Archivées ».', ok: 'Archiver', danger: true, icon: 'archive' })) {
-            saveRecipe({ archived: true }, r.id); toast('Recette archivée', { icon: 'archive', action: 'Annuler', onAction: () => saveRecipe({ archived: false }, r.id) });
+            saveRecipe({ archived: true }, r.id); undoToast('Recette archivée', () => saveRecipe({ archived: false }, r.id), { icon: 'archive' });
           }
         } }),
     ],

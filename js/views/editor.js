@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────
-// ÉDITEUR DE RECETTE (spec §5.3–5.7)
+// ÉDITEUR DE RECETTE (spec §5.3–5.7)   (v1.1)
+// v1.1 : « Coller une recette (texte) » → brouillon pré-rempli à vérifier (spec §14.3)
 // ─────────────────────────────────────────────────────────────
 import { store } from '../store.js';
 import { saveRecipe, settings, memberName } from '../model.js';
-import { UNIT_LIST, matchIngredient, normalizeUnit, RECIPE_CATEGORIES, DIFFICULTIES, SLOTS, DIETS } from '../domain.js';
+import { UNIT_LIST, matchIngredient, normalizeUnit, RECIPE_CATEGORIES, DIFFICULTIES, SLOTS, DIETS, parseRecipeText, fmtQty } from '../domain.js';
 import { INGREDIENTS, INGREDIENT } from '../data/ingredients.js';
 import { esc, compressImage, haptic } from '../utils.js';
 import { icon } from '../icons.js';
@@ -11,8 +12,61 @@ import { sheet, toast, cover, chips, chipValues, stepper, confirmDialog, palette
 
 const EMOJIS = ['🍝', '🍛', '🥘', '🍲', '🥗', '🍕', '🌮', '🍔', '🥞', '🍳', '🥐', '🍰', '🍫', '🍪', '🥧', '🍜', '🍣', '🐟', '🍗', '🥩', '🥔', '🍄', '🥦', '🎃', '🥕', '🍅', '🧀', '🥖', '🍎', '🫐', '🥤', '☕'];
 
-export function openEditor(src = null, { duplicate = false } = {}) {
-  const editing = src && !duplicate && !src.builtin;
+/** Import d'une recette collée en texte : analyse puis ouverture de l'éditeur pré-rempli. */
+export function openPasteImport() {
+  sheet({
+    title: 'Coller une recette',
+    subtitle: 'Collez le texte (message, site, note…). Mijoté repère le titre, les ingrédients et les étapes ; vous vérifiez avant d’enregistrer.',
+    full: true,
+    body: `
+      <div class="row" style="margin-bottom:10px"><button type="button" class="btn ghost sm" data-a="paste" style="flex:none">${icon('clipboard', 16)} Coller depuis le presse-papiers</button></div>
+      <textarea class="input" id="txt" rows="14" style="min-height:300px;font-size:15px" placeholder="Lasagnes de Mamie
+Pour 6 personnes
+Préparation : 30 min · Cuisson : 1 h
+
+Ingrédients
+- 500 g de bœuf haché
+- 2 cuillères à soupe d'huile d'olive
+- 1 l de lait
+
+Préparation
+1. Faire revenir la viande 10 minutes.
+2. Enfourner à 180 °C pendant 45 min."></textarea>
+      <div id="preview" class="note" style="margin-top:12px">L’aperçu de l’analyse s’affichera ici.</div>`,
+    footer: `<button class="btn primary" data-a="go">${icon('sparkles', 18)} Analyser et vérifier</button>`,
+    onMount(el, close) {
+      const ta = el.querySelector('#txt');
+      const prev = el.querySelector('#preview');
+      const show = () => {
+        const r = parseRecipeText(ta.value);
+        if (!ta.value.trim()) { prev.innerHTML = 'L’aperçu de l’analyse s’affichera ici.'; return r; }
+        prev.innerHTML = `<b>${esc(r.title || 'Sans titre')}</b>${r.servings ? ` · ${r.servings} pers.` : ''}${r.prep ? ` · prépa ${r.prep} min` : ''}${r.cook ? ` · cuisson ${r.cook} min` : ''}<br>
+          ✅ ${r.ingredients.length} ingrédient${r.ingredients.length > 1 ? 's' : ''} · ${r.steps.length} étape${r.steps.length > 1 ? 's' : ''}
+          ${r.ingredients.length ? `<br><small>${r.ingredients.slice(0, 6).map((i) => `${i.q != null ? fmtQty(i.q, i.u || 'unité') + ' ' : ''}${esc(i.name)}`).join(' · ')}${r.ingredients.length > 6 ? '…' : ''}</small>` : ''}`;
+        return r;
+      };
+      ta.addEventListener('input', show);
+      setTimeout(() => ta.focus(), 350);
+      el.querySelector('[data-a=paste]').onclick = async () => {
+        try { ta.value = await navigator.clipboard.readText(); show(); }
+        catch { toast('Collez avec un appui long dans la zone de texte', { icon: 'info' }); ta.focus(); }
+      };
+      el.querySelector('[data-a=go]').onclick = () => {
+        const r = show();
+        if (!r.title && !r.ingredients.length && !r.steps.length) return toast('Collez d’abord le texte de la recette', { icon: 'info' });
+        close();
+        setTimeout(() => openEditor({
+          title: r.title, description: '', servings: r.servings || settings().defaultServings, prep: r.prep ?? 15, cook: r.cook ?? 0,
+          ingredients: r.ingredients.map((i) => ({ q: i.q, u: i.u || (i.q != null ? '' : ''), name: i.name, note: i.note, opt: i.opt })),
+          steps: r.steps,
+        }, { imported: true }), 380);
+      };
+    },
+  });
+}
+
+export function openEditor(src = null, { duplicate = false, imported = false } = {}) {
+  const editing = !!(src && src.id && !duplicate && !imported && !src.builtin);
   const base = src ? JSON.parse(JSON.stringify(src)) : {};
   const startVersion = editing ? store.get('recipes', src.id)?._u : null;
   const r = {
@@ -42,7 +96,7 @@ export function openEditor(src = null, { duplicate = false } = {}) {
   };
   const stepRow = (s, k) => `<div class="step-row" data-k="${k}">
     <div class="sr-head"><span class="num">${k + 1}</span><input class="input" data-f="title" placeholder="Titre de l'étape (facultatif)" value="${esc(s.title || '')}" style="margin:0;min-height:42px">
-      <button type="button" class="icon-btn ghost sm" data-up="${k}" aria-label="Monter" style="transform:rotate(180deg)">${icon('down', 16)}</button>
+      <button type="button" class="icon-btn ghost sm" data-up="${k}" aria-label="Monter">${icon('up', 16)}</button>
       <button type="button" class="icon-btn ghost sm" data-rm-step="${k}" aria-label="Retirer">${icon('trash', 16)}</button></div>
     <textarea class="input" data-f="text" placeholder="Décrivez précisément l'étape…" rows="3">${esc(s.text || '')}</textarea>
     <div class="sr-foot"><input class="input" data-f="dur" inputmode="numeric" placeholder="⏱ Minuteur (min)" value="${s.dur ? Math.round(s.dur / 60) : ''}" style="margin:0">
@@ -50,10 +104,11 @@ export function openEditor(src = null, { duplicate = false } = {}) {
   </div>`;
 
   sheet({
-    title: editing ? 'Modifier la recette' : duplicate ? 'Personnaliser la recette' : 'Nouvelle recette',
-    subtitle: editing ? `Créée par ${esc(memberName(src.authorId) || 'un membre')}` : `Auteur : ${esc(store.member?.name || '—')}`,
+    title: editing ? 'Modifier la recette' : duplicate ? 'Personnaliser la recette' : imported ? 'Vérifier la recette importée' : 'Nouvelle recette',
+    subtitle: editing ? `Créée par ${esc(memberName(src.authorId) || 'un membre')}` : imported ? 'Relisez les quantités et unités, corrigez si besoin, puis enregistrez.' : `Auteur : ${esc(store.member?.name || '—')}`,
     full: true,
     body: `
+      ${!editing && !duplicate && !imported ? `<button type="button" class="card import-cta" data-act="import">${icon('clipboard', 20)}<span><b>Vous avez la recette en texte ?</b><small>Collez-la : Mijoté remplit le formulaire pour vous</small></span>${icon('right', 18)}</button>` : ''}
       <datalist id="units">${UNIT_LIST.map((u) => `<option value="${u}">`).join('')}</datalist>
       <datalist id="ingredients">${INGREDIENTS.filter((i) => !i.skip).map((i) => `<option value="${esc(i.name)}">`).join('')}</datalist>
       <div class="photo-drop" id="photo">${cover({ ...r, palette: r.palette || paletteFor(r.title) }, { eager: true })}
@@ -141,6 +196,7 @@ export function openEditor(src = null, { duplicate = false } = {}) {
       el.addEventListener('click', async (e) => {
         const t = e.target.closest('[data-act],[data-rm-ing],[data-rm-step],[data-up]');
         if (!t) return;
+        if (t.dataset.act === 'import') { close(); setTimeout(openPasteImport, 380); return; }
         readRows();
         if (t.dataset.rmIng != null) { r.ingredients.splice(+t.dataset.rmIng, 1); redrawIngs(); return; }
         if (t.dataset.rmStep != null) { r.steps.splice(+t.dataset.rmStep, 1); redrawSteps(); return; }
@@ -158,7 +214,7 @@ export function openEditor(src = null, { duplicate = false } = {}) {
         if (!title) { $('#title').focus(); return toast('Donnez un nom à la recette', { icon: 'info' }); }
         const ingredients = r.ingredients.filter((i) => i.name).map((i) => {
           const ing = matchIngredient(i.name);
-          const q = i.q === '' ? null : +i.q;
+          const q = i.q === '' || i.q == null ? null : +i.q;
           return { ing, name: ing ? undefined : i.name, q: isNaN(q) ? null : q, u: normalizeUnit(i.u || (ing ? INGREDIENT[ing].unit : 'unité')), ...(i.opt ? { opt: true } : {}), ...(i.note ? { note: i.note } : {}) };
         }).map((i) => JSON.parse(JSON.stringify(i)));
         const steps = r.steps.filter((s) => s.text || s.title);
@@ -172,7 +228,6 @@ export function openEditor(src = null, { duplicate = false } = {}) {
           tips: $('#tips').value.trim(), storage: $('#storage').value.trim(), reheat: $('#reheat').value.trim(), notes: $('#notes').value.trim(),
           ingredients, steps,
         };
-        // Contrôle de concurrence (spec §12.4) : la recette a-t-elle été modifiée ailleurs pendant l'édition ?
         if (editing) {
           const cur = store.get('recipes', src.id);
           if (cur && startVersion && cur._u !== startVersion && cur._by && cur._by !== store.memberId) {

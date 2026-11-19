@@ -1,7 +1,7 @@
 {
   "name": "mijote",
-  "version": "1.0.0",
-  "description": "Mijoté — application familiale de planning des repas, recettes et courses (PWA).",
+  "version": "1.1.0",
+  "description": "Mijoté — application familiale de planning des repas, recettes, courses et stock (PWA).",
   "type": "module",
   "private": true,
   "scripts": {

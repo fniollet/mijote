@@ -17,10 +17,10 @@ export const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
 export const norm = (s) =>
   String(s ?? '')
     .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
     .replace(/œ/g, 'oe')
     .replace(/æ/g, 'ae')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 

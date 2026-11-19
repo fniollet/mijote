@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Référentiel global des ingrédients (spec §6.3)
 // id · nom canonique · synonymes · rayon · unité habituelle
-// pantry = produit de placard (affiché à part « à vérifier »)
+// pantry = produit de placard (affiché à part « à vérifier », non suivi en stock)
 // skip   = jamais ajouté aux courses (ex. eau du robinet)
 // Les produits non interchangeables (crème entière / légère)
 // ont des identifiants distincts et ne sont jamais fusionnés.

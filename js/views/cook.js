@@ -1,16 +1,16 @@
 // ─────────────────────────────────────────────────────────────
-// MODE CUISINE (spec §7) — étapes une par une, minuteurs, portions
+// MODE CUISINE (spec §7) — étapes une par une, minuteurs, portions   (v1.1)
+// v1.1 : à la fin, proposition de retirer du stock les ingrédients utilisés.
 // Les minuteurs reposent sur une heure de fin absolue : ils restent
 // justes même si l'écran se met en veille ou si l'app passe en arrière-plan.
 // ─────────────────────────────────────────────────────────────
-import { recipe } from '../model.js';
+import { recipe, stockUsedBy, consumeStock } from '../model.js';
 import { scaleQty, fmtQty, ingredientName } from '../domain.js';
 import { esc, fmtClock, fmtDuration, haptic, norm } from '../utils.js';
 import { icon } from '../icons.js';
-import { cover, stepper, keepAwake, confetti, toast } from '../ui.js';
+import { cover, stepper, keepAwake, confetti, toast, undoToast } from '../ui.js';
 import { LS } from '../store.js';
 
-// minuteurs globaux (survivent à la navigation et au rechargement)
 let timers = LS.get('timers', []).filter((t) => t.end > Date.now() - 3600e3 || t.paused);
 const saveTimers = () => LS.set('timers', timers);
 
@@ -21,6 +21,7 @@ export function mount(root, params) {
   let phase = 'start'; // start | step | all | finish
   let cur = 0;
   let dir = 'r';
+  let stockDone = false;
   const done = new Set(LS.get('cookdone:' + r.id, []));
   const steps = r.steps?.length ? r.steps : [{ title: 'Préparer', text: 'Cette recette n’a pas encore d’étapes détaillées.' }];
   const [c1, c2] = r.palette || ['#ff9b52', '#ff5b2e'];
@@ -48,6 +49,18 @@ export function mount(root, params) {
       const words = norm(i.name).split(' ').filter((w) => w.length > 3);
       return words.some((w) => t.includes(w.replace(/s$/, '')));
     });
+  };
+
+  const stockBox = () => {
+    if (stockDone) return `<div class="cook-stockbox"><b>✅ Stock mis à jour</b></div>`;
+    const used = stockUsedBy(r, servings);
+    if (!used.length) return '';
+    return `<div class="cook-stockbox" id="sbox">
+      <b>🧊 Mettre à jour « Chez moi » ?</b>
+      <small>Ces ingrédients sont dans votre stock. Décochez ce que vous n’avez pas utilisé.</small>
+      ${used.map((u, i) => `<label class="sb-row"><input type="checkbox" data-u="${i}" checked><span>${esc(u.name)}</span><b>${u.qty != null ? '−' + fmtQty(u.qty, u.unit) : 'tout'}</b></label>`).join('')}
+      <div class="row" style="margin-top:12px"><button class="btn ghost" data-a="nostock" style="color:#fff;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.3)">Non merci</button>
+      <button class="btn primary" data-a="stock">Mettre à jour</button></div></div>`;
   };
 
   const paint = () => {
@@ -88,7 +101,7 @@ export function mount(root, params) {
       nav.innerHTML = `<button class="btn primary next" data-a="resume">Reprendre à l’étape ${cur + 1}</button>`;
     } else {
       stage.innerHTML = `<div class="cook-finish"><div><div class="big">🍽️</div><h2>Bon appétit !</h2>
-        <p style="color:#c9b9a8;font-size:18px">${esc(r.title)} est prêt pour ${servings} personne${servings > 1 ? 's' : ''}.</p></div></div>`;
+        <p style="color:#c9b9a8;font-size:18px">${esc(r.title)} est prêt pour ${servings} personne${servings > 1 ? 's' : ''}.</p>${stockBox()}</div></div>`;
       nav.innerHTML = `<button class="btn primary next" data-a="close">Revenir à l’application</button>`;
     }
     paintTimers();
@@ -181,11 +194,19 @@ export function mount(root, params) {
       case 'resume': phase = 'step'; return paint();
       case 'timer': return startTimer();
       case 'done': done.has(cur) ? done.delete(cur) : done.add(cur); LS.set('cookdone:' + r.id, [...done]); haptic(8); return paint();
+      case 'nostock': el.querySelector('#sbox')?.remove(); return;
+      case 'stock': {
+        const used = stockUsedBy(r, servings);
+        const picked = [...el.querySelectorAll('#sbox [data-u]')].filter((c) => c.checked).map((c) => used[+c.dataset.u]).filter(Boolean);
+        const undos = picked.map((u) => consumeStock(u.key, u.qty, u.lots));
+        stockDone = true; haptic(12); paint();
+        undoToast(`Stock mis à jour · ${picked.length} produit${picked.length > 1 ? 's' : ''}`, () => { undos.reverse().forEach((u) => u()); }, { icon: 'fridge' });
+        return;
+      }
     }
   });
   el.addEventListener('change', (e) => { if (e.target.name === 'cs') { servings = +e.target.value; paint(); } });
 
-  // glisser à gauche / droite pour changer d'étape
   let x0 = null, y0 = null;
   const stage = el.querySelector('#stage');
   stage.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });

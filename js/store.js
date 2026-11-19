@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// STORE — source de vérité côté client            (v1.0.1)
+// STORE — source de vérité côté client            (v1.1)
 //
 //  • Mode « local »  : données sur l'appareil (IndexedDB), idéal pour essayer.
 //  • Mode « famille » : Supabase (Auth + Postgres + RLS + Realtime).
@@ -22,7 +22,7 @@
 // ─────────────────────────────────────────────────────────────
 import { uid } from './utils.js';
 
-export const COLLECTIONS = ['settings', 'members', 'recipes', 'meals', 'items', 'purchases', 'favorites'];
+export const COLLECTIONS = ['settings', 'members', 'recipes', 'meals', 'items', 'purchases', 'favorites', 'stock'];
 
 // ── Mini clé/valeur IndexedDB ────────────────────────────────
 const idb = (() => {
@@ -305,7 +305,9 @@ class Store extends EventTarget {
           }
           if (isAuthError(error) || isNetworkError(error)) { this.lastError = 'ENVOI: ' + (error.status ? error.status + ' ' : '') + (error.message || ''); ok = false; break; } // on garde l'opération
           console.error('[mijote] rejet serveur', error, op);
-          this.emit('error', { message: 'Une modification a été refusée par le serveur.' });
+          this.emit('error', { message: error.code === '23514'
+            ? 'Le serveur n’accepte pas encore le stock : lancez la requête SQL de mise à jour v1.1 dans Supabase.'
+            : 'Une modification a été refusée par le serveur (' + (error.code || error.message || 'erreur') + ').' });
           this.outbox.shift();
         } else {
           this.outbox.shift();

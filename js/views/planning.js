@@ -1,19 +1,22 @@
 // ─────────────────────────────────────────────────────────────
-// PLANNING (spec §4) — vue hebdomadaire, 3 créneaux, glisser-déposer
+// PLANNING (spec §4) — vue hebdomadaire, 3 créneaux, glisser-déposer   (v1.1)
+// v1.1 : reprendre une semaine passée (spec §14.7)
 // ─────────────────────────────────────────────────────────────
 import { store } from '../store.js';
 import {
-  mealsOn, addMeal, updateMeal, deleteMeal, copyMeal, duplicateDay, recipe, allRecipes, favoriteSet,
+  mealsOn, addMeal, updateMeal, deleteMeal, copyMeal, duplicateDay, copyWeek, pastWeeks, recipe, allRecipes, favoriteSet,
   settings, mealTitle, mealTime, memberName, usageCount,
 } from '../model.js';
 import { SLOTS, SLOT, totalTime, searchRecipes } from '../domain.js';
-import { esc, todayISO, addDays, startOfWeek, fmtDate, dayName, fromISO, relDay, fmtDuration, haptic, norm } from '../utils.js';
+import { esc, todayISO, addDays, startOfWeek, fmtDate, dayName, fromISO, relDay, fmtDuration, haptic } from '../utils.js';
 import { icon } from '../icons.js';
-import { sheet, actionSheet, confirmDialog, toast, cover, stepper, avatar } from '../ui.js';
-import { mealThumb, FREE_PRESETS, freeEmoji } from './shared.js';
+import { sheet, actionSheet, confirmDialog, toast, undoToast, cover, stepper } from '../ui.js';
+import { mealThumb, FREE_PRESETS } from './shared.js';
 
 let weekStart = startOfWeek(todayISO());
 let focusDay = todayISO();
+
+const undoMeals = (ids) => () => store.batch(() => ids.forEach((id) => store.del('meals', id)));
 
 export function mount(root, params = {}) {
   if (params.date) { weekStart = startOfWeek(params.date); focusDay = params.date; }
@@ -38,6 +41,7 @@ export function mount(root, params = {}) {
             <small>${isThisWeek ? 'Glissez un repas pour le déplacer' : `<button class="linkish" data-act="today">Revenir à aujourd'hui</button>`}</small></div>
           <button class="icon-btn" data-act="next" aria-label="Semaine suivante">${icon('right')}</button>
         </div>
+        ${!count ? `<button class="card resume-week" data-act="past-weeks">${icon('repeat', 20)}<span><b>Semaine vide</b><small>Reprendre une semaine passée en un geste</small></span>${icon('right', 18)}</button>` : ''}
         <nav class="day-pills">${days.map((d) => `
           <button class="day-pill ${d === today ? 'today' : ''} ${d === focusDay ? 'on' : ''}" data-act="pill" data-d="${d}">
             <small>${dayName(d, true)}</small><b>${fromISO(d).getDate()}</b></button>`).join('')}</nav>
@@ -48,7 +52,7 @@ export function mount(root, params = {}) {
 
   const dayCard = (d, today) => `
     <section class="day-card ${d === today ? 'today' : ''} ${d < today ? 'past' : ''}" id="day-${d}" data-day="${d}">
-      <div class="day-head"><h3>${dayName(d)}<small>${fromISO(d).getDate()} ${fmtDate(d, { noDay: true, shortMonth: true }).split(' ')[1]}${d === today ? " · aujourd'hui" : ''}</small></h3>
+      <div class="day-head"><h3>${dayName(d)}<small>${fmtDate(d, { noDay: true, shortMonth: true })}${d === today ? " · aujourd'hui" : ''}</small></h3>
         <button class="icon-btn ghost sm" data-act="day-menu" data-d="${d}" aria-label="Options du jour">${icon('more', 20)}</button></div>
       <div class="slots">${SLOTS.map((s) => `
         <div class="slot" data-d="${d}" data-slot="${s.id}">
@@ -81,6 +85,7 @@ export function mount(root, params = {}) {
     if (a === 'add') openAddMeal({ date: t.dataset.d, slot: t.dataset.slot });
     if (a === 'day-menu') dayMenu(t.dataset.d);
     if (a === 'week-menu') weekMenu();
+    if (a === 'past-weeks') openPastWeeks(weekStart, (s) => { weekStart = s; paint(); });
   };
 
   const scrollToDay = (d) => document.getElementById('day-' + d)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -88,10 +93,10 @@ export function mount(root, params = {}) {
   const weekMenu = () => actionSheet({
     title: 'Semaine',
     actions: [
-      { icon: 'copy', label: 'Copier toute la semaine vers la suivante', run: () => {
-        let n = 0;
-        store.batch(() => { for (let i = 0; i < 7; i++) n += duplicateDay(addDays(weekStart, i), addDays(weekStart, i + 7)); });
-        toast(`${n} repas copiés sur la semaine suivante`, { action: 'Voir', onAction: () => { weekStart = addDays(weekStart, 7); paint(); } });
+      { icon: 'repeat', label: 'Reprendre une semaine passée…', hint: 'Copie ses repas sur cette semaine', run: () => openPastWeeks(weekStart, (s) => { weekStart = s; paint(); }) },
+      { icon: 'copy', label: 'Copier cette semaine vers la suivante', run: () => {
+        const ids = copyWeek(weekStart, addDays(weekStart, 7));
+        undoToast(`${ids.length} repas copiés sur la semaine suivante`, undoMeals(ids), { icon: 'copy' });
       } },
       { icon: 'cart', label: 'Voir les courses de la semaine', run: () => (location.hash = '#/courses') },
       { sep: true },
@@ -100,7 +105,7 @@ export function mount(root, params = {}) {
         if (!list.length) return;
         if (await confirmDialog({ title: 'Vider la semaine ?', text: `${list.length} repas seront retirés du planning. Les achats déjà effectués sont conservés.`, ok: 'Vider', danger: true, icon: 'trash' })) {
           store.batch(() => list.forEach((m) => deleteMeal(m.id)));
-          toast('Semaine vidée', { action: 'Annuler', onAction: () => store.batch(() => list.forEach((m) => store.put('meals', m.id, { deleted: false }))) });
+          undoToast('Semaine vidée', () => store.batch(() => list.forEach((m) => store.put('meals', m.id, { deleted: false }))), { icon: 'trash' });
         }
       } },
     ],
@@ -113,14 +118,15 @@ export function mount(root, params = {}) {
       { icon: 'copy', label: 'Dupliquer la journée…', hint: 'Copier les repas vers un autre jour', run: async () => {
         const res = await pickDates({ title: 'Dupliquer vers…', date: addDays(d, 1), multi: true, withSlot: false });
         if (!res) return;
-        let n = 0; store.batch(() => res.dates.forEach((x) => (n += duplicateDay(d, x))));
-        toast(`${n} repas dupliqués`);
+        const ids = [];
+        store.batch(() => res.dates.forEach((x) => ids.push(...duplicateDay(d, x))));
+        undoToast(`${ids.length} repas dupliqués`, undoMeals(ids), { icon: 'copy' });
       } },
       { sep: true },
       { icon: 'trash', label: 'Vider la journée', danger: true, run: () => {
         const list = mealsOn(d);
         store.batch(() => list.forEach((m) => deleteMeal(m.id)));
-        list.length && toast('Journée vidée', { action: 'Annuler', onAction: () => store.batch(() => list.forEach((m) => store.put('meals', m.id, { deleted: false }))) });
+        list.length && undoToast('Journée vidée', () => store.batch(() => list.forEach((m) => store.put('meals', m.id, { deleted: false }))), { icon: 'trash' });
       } },
     ],
   });
@@ -174,7 +180,7 @@ export function mount(root, params = {}) {
           const prev = { date: m.date, slot: m.slot };
           updateMeal(id, { date: d, slot });
           haptic(14);
-          toast(`Déplacé à ${relDay(d).toLowerCase()} · ${SLOT[slot].label.toLowerCase()}`, { icon: 'move', action: 'Annuler', onAction: () => updateMeal(id, prev) });
+          undoToast(`Déplacé à ${relDay(d).toLowerCase()} · ${SLOT[slot].label.toLowerCase()}`, () => updateMeal(id, prev), { icon: 'move' });
         }
       }
       if (active) { dragState.justDropped = true; setTimeout(() => (dragState.justDropped = false), 50); }
@@ -201,6 +207,32 @@ export function mount(root, params = {}) {
     refresh: paint,
     destroy() { root.removeEventListener('pointerdown', onDown); document.removeEventListener('touchmove', blockTouch); root.removeEventListener('contextmenu', blockMenu); },
   };
+}
+
+// ── Reprendre une semaine passée (spec §14.7) ─────────────────
+export function openPastWeeks(target, onDone) {
+  const weeks = pastWeeks();
+  sheet({
+    title: 'Reprendre une semaine',
+    subtitle: `Les repas seront copiés sur la semaine du ${fmtDate(target, { noDay: true })}.`,
+    body: weeks.length ? `<div class="src-list">${weeks.map((w) => {
+      const titles = [...new Set(w.meals.map(mealTitle))];
+      const thumbs = w.meals.filter((m) => m.recipeId).slice(0, 4).map((m) => cover(recipe(m.recipeId))).join('');
+      return `<button class="src week-pick" data-w="${w.start}"><span class="wp-thumbs">${thumbs || '<div class="m-free">🥢</div>'}</span>
+        <span style="min-width:0;flex:1"><b>Semaine du ${fmtDate(w.start, { noDay: true })}</b><small>${w.meals.length} repas · ${titles.slice(0, 3).map(esc).join(', ')}${titles.length > 3 ? '…' : ''}</small></span>${icon('right', 18)}</button>`;
+    }).join('')}</div>` : `<div class="empty-state" style="padding:30px 10px"><div class="big">🗓️</div><h3>Aucune semaine passée</h3><p>Dès que vous aurez planifié quelques semaines, vous pourrez les reprendre ici.</p></div>`,
+    onMount(el, close) {
+      el.addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-w]'); if (!b) return;
+        const existing = Array.from({ length: 7 }, (_, i) => mealsOn(addDays(target, i))).flat().length;
+        if (existing && !(await confirmDialog({ title: 'Ajouter à la semaine ?', text: `Cette semaine contient déjà ${existing} repas. Les repas copiés s’ajouteront à côté.`, ok: 'Ajouter', icon: 'repeat' }))) return;
+        const ids = copyWeek(b.dataset.w, target);
+        haptic(14); close();
+        onDone && onDone(target);
+        undoToast(`${ids.length} repas repris 🎉 · les courses sont à jour`, undoMeals(ids), { icon: 'repeat' });
+      });
+    },
+  });
 }
 
 // ── Ajout / modification d'un repas (spec §4.4) ──────────────
@@ -298,12 +330,12 @@ export function openAddMeal({ date = todayISO(), slot = 'dinner', recipeId = nul
           recipeId: st.kind === 'recipe' ? st.recipeId : null, title: st.kind === 'recipe' ? '' : title,
           time: el.querySelector('#mtime').value || '', note: el.querySelector('#mnote').value.trim(),
         };
-        if (editing) updateMeal(meal.id, data); else addMeal(data);
+        let undo;
+        if (editing) { const prev = Object.fromEntries(Object.keys(data).map((k) => [k, meal[k] ?? null])); updateMeal(meal.id, data); undo = () => updateMeal(meal.id, prev); }
+        else { const m = addMeal(data); undo = () => store.del('meals', m.id); }
         haptic(14);
         close();
-        toast(`${editing ? 'Repas mis à jour' : 'Ajouté'} · ${relDay(st.date)} ${SLOT[st.slot].short.toLowerCase()}`, {
-          icon: 'calendar', action: location.hash.startsWith('#/planning') ? '' : 'Voir', onAction: () => (location.hash = `#/planning?d=${st.date}`),
-        });
+        undoToast(`${editing ? 'Repas mis à jour' : 'Ajouté'} · ${relDay(st.date)} ${SLOT[st.slot].short.toLowerCase()}`, undo, { icon: 'calendar' });
       };
     },
   });
@@ -311,7 +343,7 @@ export function openAddMeal({ date = todayISO(), slot = 'dinner', recipeId = nul
 
 async function removeMeal(m) {
   deleteMeal(m.id);
-  toast('Repas retiré du planning', { icon: 'trash', action: 'Annuler', onAction: () => store.put('meals', m.id, { deleted: false }) });
+  undoToast('Repas retiré du planning', () => store.put('meals', m.id, { deleted: false }), { icon: 'trash' });
 }
 
 // ── Actions sur un repas (spec §4.5) ──────────────────────────
@@ -331,21 +363,20 @@ export function openMealActions(m) {
       { icon: 'edit', label: r ? 'Modifier / changer de recette' : 'Modifier', run: () => openAddMeal({ meal: store.get('meals', m.id) }) },
       { icon: 'move', label: 'Déplacer…', run: async () => {
         const res = await pickDates({ title: 'Déplacer vers…', date: m.date, slot: m.slot });
-        if (res) { updateMeal(m.id, { date: res.dates[0], slot: res.slot }); toast(`Déplacé · ${relDay(res.dates[0])}`, { icon: 'move', action: 'Annuler', onAction: () => updateMeal(m.id, { date: m.date, slot: m.slot }) }); }
+        if (res) { updateMeal(m.id, { date: res.dates[0], slot: res.slot }); undoToast(`Déplacé · ${relDay(res.dates[0])}`, () => updateMeal(m.id, { date: m.date, slot: m.slot }), { icon: 'move' }); }
       } },
       { icon: 'copy', label: 'Copier vers…', run: async () => {
         const res = await pickDates({ title: 'Copier vers…', date: addDays(m.date, 1), slot: m.slot });
-        if (res) { copyMeal(m.id, res.dates[0], res.slot); toast(`Copié · ${relDay(res.dates[0])}`); }
+        if (res) { const c = copyMeal(m.id, res.dates[0], res.slot); undoToast(`Copié · ${relDay(res.dates[0])}`, undoMeals([c.id]), { icon: 'copy' }); }
       } },
       { icon: 'repeat', label: 'Répéter sur plusieurs jours…', run: async () => {
         const res = await pickDates({ title: 'Répéter ce repas', date: addDays(m.date, 1), slot: m.slot, multi: true });
-        if (res) { store.batch(() => res.dates.forEach((d) => copyMeal(m.id, d, res.slot))); toast(`Répété sur ${res.dates.length} jour${res.dates.length > 1 ? 's' : ''}`); }
+        if (res) { const ids = []; store.batch(() => res.dates.forEach((d) => ids.push(copyMeal(m.id, d, res.slot).id))); undoToast(`Répété sur ${ids.length} jour${ids.length > 1 ? 's' : ''}`, undoMeals(ids), { icon: 'repeat' }); }
       } },
       { sep: true },
       { icon: 'trash', label: 'Retirer du planning', danger: true, run: () => removeMeal(m) },
     ],
   });
-  // le stepper du header modifie le repas en direct
   setTimeout(() => {
     const inp = document.querySelector('.sheet-wrap:last-child input[name=mserv]');
     inp?.addEventListener('change', () => updateMeal(m.id, { servings: +inp.value }));

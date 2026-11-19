@@ -224,9 +224,7 @@ export function runOnboarding() {
 
     const done = () => { unmount(); resolve(); };
 
-    // Point d'entrée
     if (store.mode) {
-      // famille ouverte mais pas encore de profil sur cet appareil
       if (!members(true).length) { draft.mode = store.mode === 'cloud' ? 'cloud-existing' : 'local'; stepName(); }
       else pickMember();
     } else welcome();
@@ -254,6 +252,7 @@ export function humanError(e) {
   if (/invalid login/i.test(m)) return 'Identifiant ou mot de passe incorrect.';
   if (/already registered|already exists/i.test(m)) return 'Un espace existe déjà avec cet e-mail : utilisez « Rejoindre ma famille ».';
   if (/email not confirmed/i.test(m)) return 'E-mail pas encore confirmé : cliquez sur le lien reçu par e-mail.';
+  if (/signups? not allowed|signup is disabled/i.test(m)) return 'Les inscriptions sont fermées : demandez vos identifiants à l’administrateur puis utilisez « Rejoindre ma famille ».';
   if (/rate limit/i.test(m)) return 'Trop de tentatives, réessayez dans quelques minutes.';
   if (/fetch|network/i.test(m)) return 'Pas de connexion Internet.';
   return m || 'Une erreur est survenue.';
