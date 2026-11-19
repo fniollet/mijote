@@ -4,15 +4,16 @@
 //    repli sur le cache hors ligne → l'app s'ouvre même sans réseau.
 //  • Polices & bibliothèque Supabase (CDN versionnés) : cache puis mise à jour.
 //  • Appels API Supabase : jamais mis en cache (données temps réel).
+// ⚠️ Augmenter VERSION à chaque publication pour mettre à jour les téléphones.
 // ─────────────────────────────────────────────────────────────
-const VERSION = 'mijote-v1.0.0';
+const VERSION = 'mijote-v1.0.1';
 const SHELL = [
   './', './index.html', './styles.css', './config.js', './manifest.webmanifest',
   './js/app.js', './js/utils.js', './js/icons.js', './js/ui.js', './js/store.js', './js/model.js',
   './js/domain.js', './js/intro.js', './js/onboarding.js',
   './js/data/ingredients.js', './js/data/recipes.js',
   './js/views/home.js', './js/views/planning.js', './js/views/recipes.js', './js/views/recipe.js',
-  './js/views/editor.js', './js/views/shopping.js', './js/views/cook.js', './js/views/settings.js',
+  './js/views/editor.js', './js/views/shopping.js', './js/views/cook.js', './js/views/settings.js', './js/views/shared.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 
@@ -57,7 +58,7 @@ self.addEventListener('fetch', (e) => {
     (async () => {
       const cache = await caches.open(VERSION);
       try {
-        const res = await Promise.race([fetch(req), timeout(4000)]);
+        const res = await Promise.race([fetch(req, { cache: 'no-cache' }), timeout(4000)]);
         if (res && res.ok) cache.put(req, res.clone());
         return res;
       } catch {
@@ -70,7 +71,6 @@ self.addEventListener('fetch', (e) => {
   );
 });
 
-// Clic sur une notification (fin de minuteur) → ramène l'app au premier plan
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   e.waitUntil(
