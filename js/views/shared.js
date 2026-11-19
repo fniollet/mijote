@@ -72,7 +72,7 @@ export async function forceSyncWithFeedback() {
   forcing = false;
   if (ok) toast('Synchronisé ✓ · tout est à jour', { icon: 'cloud' });
   else if (!navigator.onLine) toast('Pas de connexion Internet. Vos modifications sont gardées et partiront dès le retour du réseau.', { icon: 'cloudOff', duration: 5000 });
-  else toast('Serveur injoignable pour l’instant. Nouvel essai automatique dans quelques secondes.', { icon: 'cloudOff', duration: 5000 });
+  else toast(`Synchro impossible — ${esc(store.lastError || 'erreur inconnue')}`, { icon: 'cloudOff', duration: 12000 });
 }
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-sync]')) { e.preventDefault(); e.stopPropagation(); forceSyncWithFeedback(); }
