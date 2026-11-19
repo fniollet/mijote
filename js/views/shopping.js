@@ -1,11 +1,17 @@
 // ─────────────────────────────────────────────────────────────
-// COURSES (spec §6) — liste générée + manuelle, collaborative
+// COURSES (spec §6) — liste générée + manuelle, collaborative   (v1.0.3)
+//
+// v1.0.3 :
+//  - « Annuler » après chaque article coché (plus d'article qui « disparaît ») ;
+//  - achat partiel : « j'en ai pris 2 sur 3 » → le reste reste à acheter ;
+//  - corriger les erreurs : retirer un achat précis de l'historique,
+//    décocher, ou modifier la quantité achetée.
 // ─────────────────────────────────────────────────────────────
 import { store } from '../store.js';
-import { shopping, checkItem, uncheckItem, addManualItem, clearBought, newShoppingSession, saveSettings, settings, memberName, membersMap, recipe } from '../model.js';
-import { fmtQty, parseQuickItem, SHOP_RANGES, SLOT, UNIT_LIST, normalizeUnit } from '../domain.js';
+import { shopping, checkItem, uncheckItem, addManualItem, clearBought, newShoppingSession, saveSettings, settings, memberName, recipe } from '../model.js';
+import { fmtQty, parseQuickItem, SHOP_RANGES, SLOT, UNIT_LIST, normalizeUnit, purchaseFor, round3 } from '../domain.js';
 import { CATEGORIES, CATEGORY } from '../data/ingredients.js';
-import { esc, fmtDate, relDay, timeAgo, haptic, dayName } from '../utils.js';
+import { esc, fmtDate, relDay, timeAgo, haptic, uid } from '../utils.js';
 import { icon } from '../icons.js';
 import { sheet, actionSheet, confirmDialog, toast, avatar, confetti, cover, keepAwake } from '../ui.js';
 import { emptyState } from './shared.js';
@@ -13,6 +19,37 @@ import { emptyState } from './shared.js';
 let showDone = true;
 let showPantry = false;
 let storeMode = false;
+
+// ── Actions d'achat (avec annulation) ─────────────────────────
+/** Achète tout le reste d'un article. Retourne une fonction d'annulation. */
+function buyAll(it) {
+  if (it.kind === 'manual') {
+    const prev = { checked: !!it.checked, checkedBy: it.checkedBy || null, checkedAt: it.checkedAt || null };
+    store.put('items', it.id, { checked: true, checkedBy: store.memberId, checkedAt: new Date().toISOString() });
+    return () => store.put('items', it.id, prev);
+  }
+  const id = uid('p-');
+  store.put('purchases', id, purchaseFor(it, { session: settings().shopSession, memberId: store.memberId }));
+  return () => store.del('purchases', id);
+}
+
+/** Achète une partie seulement (quantité dans l'unité de l'article). */
+function buyPart(it, qty) {
+  qty = round3(qty);
+  if (it.kind === 'manual') {
+    const prev = { qty: it.qty, bought: it.bought || 0, checked: false };
+    store.put('items', it.id, {
+      qty: round3(it.qty - qty), bought: round3((it.bought || 0) + qty),
+      lastBoughtBy: store.memberId, lastBoughtAt: new Date().toISOString(),
+    });
+    return () => store.put('items', it.id, prev);
+  }
+  const id = uid('p-');
+  store.put('purchases', id, { ...purchaseFor(it, { session: settings().shopSession, memberId: store.memberId }), qty });
+  return () => store.del('purchases', id);
+}
+
+const undoToast = (msg, undo) => toast(msg, { icon: 'check', action: 'Annuler', onAction: () => { undo(); haptic(8); toast('Annulé', { icon: 'undo', duration: 1600 }); }, duration: 5000 });
 
 export function mount(root) {
   root.innerHTML = `
@@ -25,7 +62,7 @@ export function mount(root) {
         <input id="qai" placeholder="Ajouter : « 2 l lait », « 6 œufs », « lessive »…" enterkeyhint="done" aria-label="Ajouter un article">
         <button class="btn primary" aria-label="Ajouter">${icon('plus', 22)}</button>
       </form>
-      <p class="qa-hint">Le rayon est deviné automatiquement · touchez un article pour voir son origine</p>
+      <p class="qa-hint">Cochez = tout acheté · touchez le nom pour « acheté en partie », l'origine ou corriger</p>
       <div id="list"></div>
     </div>`;
 
@@ -56,7 +93,7 @@ export function mount(root) {
         <button class="collapser ${showPantry ? '' : 'closed'}" data-act="toggle-pantry">${icon('down', 18)} 🫙 Probablement au placard · à vérifier (${pantry.length})</button>
         ${showPantry ? `<div class="aisle-list">${pantry.map(row).join('')}</div>` : ''}` : ''}
       ${done.length ? `
-        <button class="collapser ${showDone ? '' : 'closed'}" data-act="toggle-done">${icon('down', 18)} ✅ Dans le panier (${done.length})</button>
+        <button class="collapser ${showDone ? '' : 'closed'}" data-act="toggle-done">${icon('down', 18)} ✅ Dans le panier (${done.length}) · touchez pour corriger</button>
         ${showDone ? `<div class="aisle-list">${done.map(row).join('')}</div>` : ''}` : ''}
       ${toBuy.length + done.length ? `<div class="shop-actions">
         <button class="btn ghost" data-act="clear">${icon('check', 18)} Vider le panier</button>
@@ -74,13 +111,14 @@ export function mount(root) {
     if (!it.hasQty) return '';
     if (it.partial) return `${fmtQty(it.remaining, it.unit)}<small>sur ${fmtQty(it.qty, it.unit)}</small>`;
     if (it.noLongerNeeded) return it.bought ? fmtQty(it.bought, it.unit) : '';
-    return fmtQty(it.kind === 'planned' && it.purchases?.length ? it.bought : it.qty, it.unit);
+    return fmtQty(it.purchases?.length ? it.bought : it.qty, it.unit);
   };
   const sub = (it) => {
     const bits = [];
     if (it.kind === 'manual') {
       bits.push(`${avatar(store.getAny('members', it.addedBy), 16)} ajouté par ${esc(memberName(it.addedBy) || '—')}`);
       if (it.note) bits.push(`📝 ${esc(it.note)}`);
+      if (it.bought && !it.checked) bits.push(`<span class="tagx warn">déjà ${fmtQty(it.bought, it.unit)} acheté</span>`);
     } else if (it.sources?.length) {
       const titles = [...new Set(it.sources.map((s) => s.recipeTitle))];
       bits.push(`${titles.slice(0, 2).map(esc).join(', ')}${titles.length > 2 ? ` +${titles.length - 2}` : ''}`);
@@ -100,7 +138,7 @@ export function mount(root) {
     <div class="item ${isDone(it) ? 'done' : ''}" data-id="${esc(it.id)}" data-kind="${it.kind}">
       <button class="check" data-act="check" aria-label="${isDone(it) ? 'Décocher' : 'Cocher'}">${icon('check', 17)}</button>
       <div class="it-body" data-act="detail"><div class="it-name">${esc(it.name)}</div><div class="it-sub">${sub(it)}</div></div>
-      <div class="it-q">${qtyLabel(it)}</div>
+      <div class="it-q" data-act="detail">${qtyLabel(it)}</div>
     </div>`;
 
   const find = (id) => { const sh = shopping(); return [...sh.toBuy, ...sh.done].find((i) => i.id === id); };
@@ -114,15 +152,27 @@ export function mount(root) {
       case 'check': {
         if (!it) return;
         const wasDone = itemEl.classList.contains('done');
-        haptic(wasDone ? 6 : 14);
         if (!wasDone) {
+          haptic(14);
           itemEl.classList.add('done'); t.classList.add('burst');
           const remainingBefore = shopping().toBuy.filter((i) => !i.pantry).length;
           setTimeout(() => {
-            checkItem(it);
-            if (remainingBefore === 1 && !it.pantry) { confetti(); toast('Courses terminées ! 🎉', { icon: 'sparkles' }); }
+            const undo = buyAll(it);
+            if (remainingBefore === 1 && !it.pantry) { confetti(); undoToast('Courses terminées ! 🎉', undo); }
+            else undoToast(`${esc(it.name)} → dans le panier`, undo);
           }, 380);
-        } else { itemEl.classList.remove('done'); setTimeout(() => uncheckItem(it), 200); }
+        } else {
+          haptic(6);
+          itemEl.classList.remove('done');
+          const snapshot = it.kind === 'manual' ? null : (it.purchases || []).map((p) => ({ ...p }));
+          setTimeout(() => {
+            uncheckItem(it);
+            undoToast(`${esc(it.name)} → remis à acheter`, () => {
+              if (it.kind === 'manual') store.put('items', it.id, { checked: true, checkedBy: it.checkedBy, checkedAt: it.checkedAt });
+              else store.batch(() => snapshot.forEach((p) => store.put('purchases', p.id, { deleted: false })));
+            });
+          }, 200);
+        }
         return;
       }
       case 'detail': return it && openItem(it);
@@ -160,9 +210,9 @@ export function mount(root) {
     const inp = root.querySelector('#qai');
     const p = parseQuickItem(inp.value);
     if (!p) return;
-    addManualItem(p);
+    const added = addManualItem(p);
     haptic(10);
-    toast(`${esc(p.name)} ajouté · ${CATEGORY[p.category]?.emoji || ''} ${CATEGORY[p.category]?.label || ''}`, { icon: 'cart' });
+    toast(`${esc(p.name)} ajouté · ${CATEGORY[p.category]?.emoji || ''} ${CATEGORY[p.category]?.label || ''}`, { icon: 'cart', action: 'Annuler', onAction: () => store.del('items', added.id) });
     inp.value = '';
   };
 
@@ -180,10 +230,50 @@ export function mount(root) {
   return { refresh: paint, destroy: () => { if (storeMode) { keepAwake(false); storeMode = false; } } };
 }
 
-// ── Détail d'un article : traçabilité (spec §6.10, shopping_item_sources) ──
+// ── Saisie « acheté en partie » ────────────────────────────────
+function partialBlock(it) {
+  const rest = it.kind === 'manual' ? it.qty : it.remaining ?? it.qty;
+  if (rest == null || !(rest > 0) || (it.kind !== 'manual' && !it.hasQty)) return '';
+  const u = it.unit && it.unit !== 'unité' ? it.unit : '';
+  const step = ['g', 'ml'].includes(it.unit) ? (rest >= 100 ? 50 : 10) : (rest < 1 ? 0.25 : 1);
+  const def = Math.max(step, round3(Math.floor((rest / 2) / step) * step)) ;
+  return `
+    <div class="card pad" style="margin:4px 0 18px">
+      <b style="display:block;margin-bottom:4px">Acheté en partie ?</b>
+      <small class="muted" style="display:block;margin-bottom:12px">Reste à acheter : <b>${fmtQty(rest, it.unit)}</b>. Indiquez ce que vous avez pris : le reste restera dans la liste.</small>
+      <div class="row" style="gap:8px">
+        <button type="button" class="st-btn" data-pq="-1" aria-label="Moins">${icon('minus', 18)}</button>
+        <input class="input" id="pq" inputmode="decimal" value="${String(def).replace('.', ',')}" style="text-align:center;font-weight:800;font-size:18px" data-step="${step}" data-max="${rest}">
+        <button type="button" class="st-btn" data-pq="1" aria-label="Plus">${icon('plus', 18)}</button>
+        <span style="flex:none;font-weight:700;color:var(--ink-2);min-width:24px">${esc(u)}</span>
+      </div>
+      <button type="button" class="btn dark block" data-a="part" style="margin-top:12px">${icon('check', 18)} Valider l’achat partiel</button>
+    </div>`;
+}
+function readPartial(el, it) {
+  const inp = el.querySelector('#pq');
+  if (!inp) return null;
+  const v = parseFloat(String(inp.value).replace(',', '.'));
+  const max = +inp.dataset.max;
+  if (!(v > 0)) { toast('Indiquez une quantité supérieure à 0', { icon: 'info' }); return null; }
+  return { v: Math.min(v, max), full: v >= max - 1e-9 };
+}
+function wirePartial(el) {
+  el.querySelectorAll('[data-pq]').forEach((b) => (b.onclick = () => {
+    const inp = el.querySelector('#pq');
+    const step = +inp.dataset.step, max = +inp.dataset.max;
+    let v = parseFloat(String(inp.value).replace(',', '.')) || 0;
+    v = round3(Math.min(max, Math.max(step, v + step * +b.dataset.pq)));
+    inp.value = String(v).replace('.', ',');
+    haptic(4);
+  }));
+}
+
+// ── Détail d'un article : achat partiel, traçabilité, corrections ──
 function openItem(it) {
+  if (it.kind === 'manual') return openManual(it);
   const purchases = it.purchases || [];
-  if (it.kind === 'manual') return openQuickAdd(it);
+  const canBuy = !purchases.length || it.partial;
   sheet({
     title: it.name,
     subtitle: `${CATEGORY[it.category]?.emoji || ''} ${CATEGORY[it.category]?.label || ''}`,
@@ -195,19 +285,80 @@ function openItem(it) {
       </div>
       ${it.noLongerNeeded ? `<div class="warn">ℹ️ <span>Le planning a changé : cet article n’est plus nécessaire, mais son achat est conservé.</span></div>` : ''}
       ${it.surplus ? `<div class="warn">ℹ️ <span>Le besoin a diminué : ${fmtQty(it.surplus, it.unit)} en trop par rapport au planning actuel.</span></div>` : ''}
-      <h3 style="font-size:19px;margin:6px 0 10px">Pourquoi cet article ?</h3>
+      ${canBuy ? partialBlock(it) : ''}
+      ${purchases.length ? `<h3 style="font-size:19px;margin:6px 0 4px">Achats</h3>
+        <p class="muted" style="margin:0 0 10px;font-size:13.5px">Une erreur ? Retirez l’achat concerné avec ${icon('trash', 13)}.</p>
+        <div class="src-list" id="plist">${purchases.map((p) => `<div class="src">${avatar(store.getAny('members', p.by), 40)}<span style="flex:1;min-width:0"><b>${esc(memberName(p.by) || '—')}</b><small>${timeAgo(p.at)}</small></span><span class="q">${p.qty != null ? fmtQty(p.qty, p.unit) : '✓'}</span>
+          <button type="button" class="icon-btn ghost sm" data-rm="${esc(p.id)}" aria-label="Retirer cet achat">${icon('trash', 17)}</button></div>`).join('')}</div>` : ''}
+      <h3 style="font-size:19px;margin:20px 0 10px">Pourquoi cet article ?</h3>
       <div class="src-list">${(it.sources || []).map((s) => `
         <a class="src" href="#/recette/${s.recipeId}?s=${s.servings}" data-close>${cover(recipe(s.recipeId))}
           <span style="min-width:0"><b>${esc(s.recipeTitle)}</b><small>${relDay(s.date)} · ${SLOT[s.slot].label} · ${s.servings} pers.${s.optional ? ' · facultatif' : ''}</small></span>
-          <span class="q">${s.qty != null ? fmtQty(s.qty, it.unit) : ''}</span></a>`).join('') || '<p class="note">Aucun repas planifié n’utilise plus cet ingrédient.</p>'}</div>
-      ${purchases.length ? `<h3 style="font-size:19px;margin:20px 0 10px">Historique d’achat</h3>
-        <div class="src-list">${purchases.map((p) => `<div class="src">${avatar(store.getAny('members', p.by), 40)}<span><b>${esc(memberName(p.by) || '—')}</b><small>${timeAgo(p.at)}</small></span><span class="q">${p.qty != null ? fmtQty(p.qty, p.unit) : '✓'}</span></div>`).join('')}</div>` : ''}`,
-    footer: purchases.length
-      ? `<button class="btn ghost" data-a="uncheck">${icon('undo', 18)} Décocher</button>${it.partial ? `<button class="btn primary" data-a="check">Acheter le reste</button>` : ''}`
-      : `<button class="btn primary" data-a="check">${icon('check', 18)} Marquer comme acheté</button>`,
+          <span class="q">${s.qty != null ? fmtQty(s.qty, it.unit) : ''}</span></a>`).join('') || '<p class="note">Aucun repas planifié n’utilise plus cet ingrédient.</p>'}</div>`,
+    footer: `${purchases.length ? `<button class="btn ghost" data-a="uncheck">${icon('undo', 18)} Tout décocher</button>` : ''}${canBuy ? `<button class="btn primary" data-a="all">${icon('check', 18)} ${it.partial ? 'Acheter le reste' : 'Tout acheté'}</button>` : ''}`,
     onMount(el, close) {
-      el.querySelector('[data-a=check]')?.addEventListener('click', () => { checkItem(it); haptic(12); close(); });
-      el.querySelector('[data-a=uncheck]')?.addEventListener('click', () => { uncheckItem(it); close(); });
+      wirePartial(el);
+      el.querySelector('[data-a=all]')?.addEventListener('click', () => { const u = buyAll(it); haptic(12); close(); undoToast(`${esc(it.name)} → dans le panier`, u); });
+      el.querySelector('[data-a=part]')?.addEventListener('click', () => {
+        const r = readPartial(el, it); if (!r) return;
+        const u = r.full ? buyAll(it) : buyPart(it, r.v);
+        haptic(12); close();
+        undoToast(r.full ? `${esc(it.name)} → dans le panier` : `${fmtQty(r.v, it.unit)} de ${esc(it.name)} acheté · reste ${fmtQty(round3(it.remaining - r.v), it.unit)}`, u);
+      });
+      el.querySelector('[data-a=uncheck]')?.addEventListener('click', () => {
+        const ids = purchases.map((p) => p.id);
+        uncheckItem(it); close();
+        undoToast(`${esc(it.name)} → remis à acheter`, () => store.batch(() => ids.forEach((id) => store.put('purchases', id, { deleted: false }))));
+      });
+      el.querySelector('#plist')?.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-rm]'); if (!b) return;
+        const id = b.dataset.rm;
+        store.del('purchases', id); haptic(8); close();
+        undoToast('Achat retiré', () => store.put('purchases', id, { deleted: false }));
+      });
+    },
+  });
+}
+
+/** Article manuel : acheter tout / en partie, modifier, supprimer. */
+function openManual(it) {
+  if (it.checked) {
+    return actionSheet({
+      title: it.name, subtitle: `Acheté par ${esc(memberName(it.checkedBy) || '—')} ${timeAgo(it.checkedAt)}`,
+      actions: [
+        { icon: 'undo', label: 'Remettre à acheter', run: () => { const prev = { checked: true, checkedBy: it.checkedBy, checkedAt: it.checkedAt }; uncheckItem(it); undoToast(`${esc(it.name)} → remis à acheter`, () => store.put('items', it.id, prev)); } },
+        { icon: 'edit', label: 'Modifier l’article', run: () => openQuickAdd(it) },
+        { sep: true },
+        { icon: 'trash', label: 'Supprimer', danger: true, run: () => { store.del('items', it.id); undoToast('Article supprimé', () => store.put('items', it.id, { deleted: false })); } },
+      ],
+    });
+  }
+  sheet({
+    title: it.name,
+    subtitle: `Ajouté par ${esc(memberName(it.addedBy) || '—')} ${timeAgo(it.createdAt)}${it.bought ? ` · déjà ${fmtQty(it.bought, it.unit)} acheté` : ''}`,
+    body: `${partialBlock(it)}
+      <div class="action-list">
+        <button class="action-row" data-a="edit"><span class="action-ic">${icon('edit', 20)}</span><span class="action-label">Modifier l’article</span></button>
+        ${it.bought ? `<button class="action-row" data-a="resetbought"><span class="action-ic">${icon('undo', 20)}</span><span class="action-label">Annuler les achats partiels<small>Remet la quantité d’origine (${fmtQty(round3((it.qty || 0) + it.bought), it.unit)})</small></span></button>` : ''}
+        <button class="action-row danger" data-a="del"><span class="action-ic">${icon('trash', 20)}</span><span class="action-label">Supprimer</span></button>
+      </div>`,
+    footer: `<button class="btn primary" data-a="all">${icon('check', 18)} Tout acheté</button>`,
+    onMount(el, close) {
+      wirePartial(el);
+      el.querySelector('[data-a=all]').onclick = () => { const u = buyAll(it); haptic(12); close(); undoToast(`${esc(it.name)} → dans le panier`, u); };
+      el.querySelector('[data-a=part]')?.addEventListener('click', () => {
+        const r = readPartial(el, it); if (!r) return;
+        const u = r.full ? buyAll(it) : buyPart(it, r.v);
+        haptic(12); close();
+        undoToast(r.full ? `${esc(it.name)} → dans le panier` : `${fmtQty(r.v, it.unit)} acheté · reste ${fmtQty(round3(it.qty - r.v), it.unit)}`, u);
+      });
+      el.querySelector('[data-a=edit]').onclick = () => { close(); setTimeout(() => openQuickAdd(it), 350); };
+      el.querySelector('[data-a=resetbought]')?.addEventListener('click', () => {
+        const prev = { qty: it.qty, bought: it.bought };
+        store.put('items', it.id, { qty: round3((it.qty || 0) + it.bought), bought: 0 }); close();
+        undoToast('Achats partiels annulés', () => store.put('items', it.id, prev));
+      });
+      el.querySelector('[data-a=del]').onclick = () => { store.del('items', it.id); close(); undoToast('Article supprimé', () => store.put('items', it.id, { deleted: false })); };
     },
   });
 }
@@ -243,7 +394,7 @@ export function openQuickAdd(item = null) {
       };
       el.querySelector('[data-a=del]')?.addEventListener('click', () => {
         store.del('items', item.id); close();
-        toast('Article supprimé', { icon: 'trash', action: 'Annuler', onAction: () => store.put('items', item.id, { deleted: false }) });
+        undoToast('Article supprimé', () => store.put('items', item.id, { deleted: false }));
       });
     },
   });
