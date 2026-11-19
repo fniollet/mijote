@@ -1,0 +1,12 @@
+{
+  "name": "mijote",
+  "version": "1.0.0",
+  "description": "Mijoté — application familiale de planning des repas, recettes et courses (PWA).",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "npx --yes http-server . -p 8080 -c-1",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "license": "MIT"
+}
