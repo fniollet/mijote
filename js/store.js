@@ -194,7 +194,7 @@ class Store extends EventTarget {
     try {
       const { data } = await this.sb.auth.getSession();
       let s = data?.session;
-      if (!s) return false;
+      if (!s) { this.lastError = 'SESSION: aucune session — reconnectez-vous'; return false; }
       if (force || !s.expires_at || s.expires_at * 1000 < Date.now() + 120000) {
         const r = await this.sb.auth.refreshSession();
         if (r?.data?.session) s = r.data.session;
@@ -203,6 +203,7 @@ class Store extends EventTarget {
       return true;
     } catch (e) {
       console.warn('[mijote] session', e);
+      this.lastError = 'SESSION: ' + (e?.message || e);
       return false;
     }
   }
@@ -272,6 +273,7 @@ class Store extends EventTarget {
     this._retryT = setTimeout(() => this.sync(), delay);
   }
   _syncOk() {
+    this.lastError = null;
     this._retryN = 0;
     clearTimeout(this._retryT);
     this.lastSyncOkAt = Date.now();
@@ -301,7 +303,7 @@ class Store extends EventTarget {
             authRetried = true;
             if (await this._ensureSession(true)) continue; // même opération, nouveau jeton
           }
-          if (isAuthError(error) || isNetworkError(error)) { ok = false; break; } // on garde l'opération
+          if (isAuthError(error) || isNetworkError(error)) { this.lastError = 'ENVOI: ' + (error.status ? error.status + ' ' : '') + (error.message || ''); ok = false; break; } // on garde l'opération
           console.error('[mijote] rejet serveur', error, op);
           this.emit('error', { message: 'Une modification a été refusée par le serveur.' });
           this.outbox.shift();
@@ -313,6 +315,7 @@ class Store extends EventTarget {
       }
     } catch (e) {
       console.warn('[mijote] flush', e);
+      this.lastError = 'ENVOI: ' + (e?.message || e);
       ok = false;
     } finally {
       this.outbox.forEach((o) => (o.sending = false));
@@ -354,6 +357,7 @@ class Store extends EventTarget {
       return true;
     } catch (e) {
       console.warn('[mijote] pull', e);
+      if (e?.message !== 'session') this.lastError = 'LECTURE: ' + (e?.status ? e.status + ' ' : '') + (e?.code ? e.code + ' ' : '') + (e?.message || e);
       this.setStatus('offline');
       this._scheduleRetry();
       return false;
